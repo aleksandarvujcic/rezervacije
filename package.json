@@ -6,7 +6,10 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "cd client && npm install && npm run build && cd ../server && npm install && npm run build",
+    "start": "cd server && node dist/index.js",
+    "migrate": "cd server && npm run migrate",
+    "seed": "cd server && npm run seed"
   },
   "keywords": [],
   "author": "",

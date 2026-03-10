@@ -1,6 +1,12 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import Fastify, { type FastifyError } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import corsPlugin from './plugins/cors.js';
 import jwtPlugin from './plugins/jwt.js';
 import ssePlugin from './plugins/sse.js';
@@ -57,6 +63,24 @@ export async function buildApp() {
   await fastify.register(reservationsRoutes, { prefix: '/api/reservations' });
   await fastify.register(availabilityRoutes, { prefix: '/api' });
   await fastify.register(eventsRoutes, { prefix: '/api/events' });
+
+  // Serve client static files in production
+  const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
+  if (fs.existsSync(clientDist)) {
+    await fastify.register(fastifyStatic, {
+      root: clientDist,
+      prefix: '/',
+      wildcard: false,
+    });
+
+    // SPA fallback: non-API routes serve index.html
+    fastify.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith('/api')) {
+        return reply.status(404).send({ error: 'Not found', statusCode: 404 });
+      }
+      return reply.sendFile('index.html');
+    });
+  }
 
   // Global error handler
   fastify.setErrorHandler((error: FastifyError | AppError, _request, reply) => {
