@@ -41,12 +41,12 @@ const ROW_HEIGHT = 24;
 const HEADER_HEIGHT = 24;
 const ZONE_HEADER_HEIGHT = 18;
 
-// Mobile — compact for overview density
-const TABLE_COL_WIDTH_MOBILE = 56;
+// Mobile — compact
+const TABLE_COL_WIDTH_MOBILE = 40;
 const SLOT_WIDTH_MOBILE = 28;
-const ROW_HEIGHT_MOBILE = 20;
-const HEADER_HEIGHT_MOBILE = 22;
-const ZONE_HEADER_HEIGHT_MOBILE = 16;
+const ROW_HEIGHT_MOBILE = 18;
+const HEADER_HEIGHT_MOBILE = 20;
+const ZONE_HEADER_HEIGHT_MOBILE = 14;
 
 interface TimelineGridProps {
   date: string;
@@ -71,9 +71,9 @@ export function TimelineGrid({
   const isMobile = useMediaQuery('(max-width: 48em)');
   const scrollRef = useRef<HTMLDivElement>(null);
   const didAutoScroll = useRef(false);
+  const timeHeaderRef = useRef<HTMLDivElement>(null);
 
   const tableColW = isMobile ? TABLE_COL_WIDTH_MOBILE : TABLE_COL_WIDTH;
-  const rowH = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT;
   const headerH = isMobile ? HEADER_HEIGHT_MOBILE : HEADER_HEIGHT;
   const zoneHeaderH = isMobile ? ZONE_HEADER_HEIGHT_MOBILE : ZONE_HEADER_HEIGHT;
 
@@ -151,6 +151,22 @@ export function TimelineGrid({
     );
   }, [timelineData, zones, filterZoneId, filterMinCapacity, search]);
 
+  // Dynamic row height on mobile: fill 100% vertically
+  const totalTableRows = useMemo(() => {
+    return groupedEntries.reduce((sum, g) => sum + g.entries.length, 0);
+  }, [groupedEntries]);
+
+  const totalZoneHeaders = groupedEntries.length;
+
+  const rowH = useMemo(() => {
+    if (!isMobile) return ROW_HEIGHT;
+    const filterChipsHeight = 22;
+    const availableH = containerRect.height - filterChipsHeight - headerH - (totalZoneHeaders * zoneHeaderH);
+    if (totalTableRows <= 0 || availableH <= 0) return ROW_HEIGHT_MOBILE;
+    const computed = Math.floor(availableH / totalTableRows);
+    return Math.max(14, Math.min(computed, 28));
+  }, [isMobile, containerRect.height, headerH, zoneHeaderH, totalZoneHeaders, totalTableRows]);
+
   // "now" line position
   const updateNow = useCallback(() => {
     const isToday = date === dayjs().format('YYYY-MM-DD');
@@ -177,9 +193,19 @@ export function TimelineGrid({
     if (!isMobile || nowPosition === null || didAutoScroll.current) return;
     const el = scrollRef.current;
     if (!el) return;
+    // For mobile: scrollRef IS the scrollable grid body
+    const offset = Math.max(0, nowPosition - el.clientWidth / 3);
+    el.scrollLeft = offset;
+    didAutoScroll.current = true;
+  }, [isMobile, nowPosition]);
+
+  // Desktop auto-scroll
+  useEffect(() => {
+    if (isMobile || nowPosition === null || didAutoScroll.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
     const scrollViewport = el.querySelector('[data-radix-scroll-area-viewport], .mantine-ScrollArea-viewport') as HTMLElement | null;
     if (scrollViewport) {
-      // Scroll so "now" line is ~1/3 from left
       const offset = Math.max(0, nowPosition - scrollViewport.clientWidth / 3);
       scrollViewport.scrollLeft = offset;
       didAutoScroll.current = true;
@@ -190,6 +216,12 @@ export function TimelineGrid({
   useEffect(() => {
     didAutoScroll.current = false;
   }, [date]);
+
+  // Sync time header scroll with grid body scroll on mobile
+  const handleMobileScroll = useCallback(() => {
+    if (!scrollRef.current || !timeHeaderRef.current) return;
+    timeHeaderRef.current.scrollLeft = scrollRef.current.scrollLeft;
+  }, []);
 
   const handleSlotClick = useCallback(
     (tableId: number, slotTime: string) => {
@@ -220,21 +252,11 @@ export function TimelineGrid({
     );
   }
 
-  return (
-    <Stack gap={isMobile ? 2 : 4} h="100%" ref={containerRef}>
-      {/* Desktop filters */}
-      {!isMobile && (
-        <TimelineFilters
-          zones={zones ?? []}
-          selectedZoneId={filterZoneId}
-          onZoneChange={setFilterZoneId}
-          minCapacity={filterMinCapacity}
-          onMinCapacityChange={setFilterMinCapacity}
-        />
-      )}
-
-      {/* Mobile: compact zone filter chips */}
-      {isMobile && (
+  // --- MOBILE LAYOUT: fixed headers, only grid body scrolls horizontally ---
+  if (isMobile) {
+    return (
+      <Stack gap={2} h="100%" ref={containerRef}>
+        {/* Zone filter chips */}
         <ScrollArea type="never" offsetScrollbars={false}>
           <Group gap={4} wrap="nowrap" px={2}>
             <Box
@@ -280,7 +302,219 @@ export function TimelineGrid({
               ))}
           </Group>
         </ScrollArea>
-      )}
+
+        {/* Grid with fixed headers */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Top row: corner + time header */}
+          <div style={{ display: 'flex', flexShrink: 0, height: headerH }}>
+            {/* Corner cell */}
+            <div
+              style={{
+                width: tableColW,
+                flexShrink: 0,
+                borderBottom: '2px solid var(--mantine-color-gray-2)',
+                borderRight: '1px solid var(--mantine-color-gray-2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'var(--mantine-color-body)',
+              }}
+            >
+              <Text fw={700} c="dimmed" style={{ fontSize: 9 }}>#</Text>
+            </div>
+            {/* Time header — overflow hidden, synced via JS */}
+            <div
+              ref={timeHeaderRef}
+              style={{
+                flex: 1,
+                overflow: 'hidden',
+                borderBottom: '2px solid var(--mantine-color-gray-2)',
+                display: 'flex',
+              }}
+            >
+              <div style={{ display: 'flex', width: gridContentWidth, flexShrink: 0 }}>
+                {timeSlots.map((slot) => {
+                  const isFullHour = slot.endsWith(':00');
+                  return (
+                    <div
+                      key={slot}
+                      style={{
+                        width: slotWidth,
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderLeft: isFullHour
+                          ? '1px solid var(--mantine-color-gray-4)'
+                          : '1px solid var(--mantine-color-gray-2)',
+                      }}
+                    >
+                      {isFullHour && (
+                        <Text c="dark" fw={700} style={{ fontSize: 10 }}>
+                          {slot.substring(0, 2)}
+                        </Text>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Body row: table column + scrollable grid */}
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            {/* Fixed table column */}
+            <div
+              style={{
+                width: tableColW,
+                flexShrink: 0,
+                borderRight: '1px solid var(--mantine-color-gray-2)',
+                backgroundColor: 'var(--mantine-color-body)',
+                overflow: 'hidden',
+              }}
+            >
+              {groupedEntries.map((group, groupIdx) => {
+                const zoneColor = ZONE_COLORS[groupIdx % ZONE_COLORS.length];
+                return (
+                  <div key={group.zone.id}>
+                    <div
+                      style={{
+                        height: zoneHeaderH,
+                        display: 'flex',
+                        alignItems: 'center',
+                        paddingLeft: 3,
+                        backgroundColor: zoneColor.bg,
+                        borderBottom: `1px solid ${zoneColor.border}`,
+                      }}
+                    >
+                      <Text
+                        fw={700}
+                        style={{
+                          color: zoneColor.text,
+                          whiteSpace: 'nowrap',
+                          fontSize: 9,
+                          letterSpacing: 0.3,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {group.zone.name}
+                      </Text>
+                    </div>
+                    {group.entries.map((entry) => (
+                      <div
+                        key={entry.table.id}
+                        style={{
+                          height: rowH,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderBottom: '1px solid var(--mantine-color-gray-2)',
+                        }}
+                      >
+                        <Text fw={700} style={{ fontSize: Math.min(12, rowH - 2), lineHeight: 1 }}>
+                          {entry.table.table_number}
+                        </Text>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Scrollable grid body — only this scrolls horizontally */}
+            <div
+              ref={scrollRef}
+              onScroll={handleMobileScroll}
+              style={{
+                flex: 1,
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                WebkitOverflowScrolling: 'touch',
+                position: 'relative',
+              }}
+            >
+              <div style={{ width: gridContentWidth, position: 'relative' }}>
+                {groupedEntries.map((group, groupIdx) => {
+                  const zoneColor = ZONE_COLORS[groupIdx % ZONE_COLORS.length];
+                  return (
+                    <div key={group.zone.id}>
+                      <div
+                        style={{
+                          height: zoneHeaderH,
+                          backgroundColor: zoneColor.bg,
+                          borderBottom: `1px solid ${zoneColor.border}`,
+                        }}
+                      />
+                      {group.entries.map((entry) => (
+                        <TimelineRow
+                          key={entry.table.id}
+                          entry={entry}
+                          timeSlots={timeSlots}
+                          openTime={openTime}
+                          slotWidth={slotWidth}
+                          rowHeight={rowH}
+                          isMobile
+                          searchTerm={search}
+                          onSlotClick={handleSlotClick}
+                          onViewReservation={onViewReservation}
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
+
+                {/* "Now" line */}
+                {nowPosition !== null && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: nowPosition,
+                      width: 1,
+                      backgroundColor: 'var(--mantine-color-teal-6)',
+                      boxShadow: '0 0 4px var(--mantine-color-teal-4)',
+                      zIndex: 5,
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        backgroundColor: 'var(--mantine-color-teal-6)',
+                        marginLeft: -2.5,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <style>{`
+          @keyframes pulse-border {
+            0%, 100% { border-color: #FF5722; }
+            50% { border-color: transparent; }
+          }
+        `}</style>
+      </Stack>
+    );
+  }
+
+  // --- DESKTOP LAYOUT: sticky headers inside ScrollArea ---
+  return (
+    <Stack gap={4} h="100%" ref={containerRef}>
+      <TimelineFilters
+        zones={zones ?? []}
+        selectedZoneId={filterZoneId}
+        onZoneChange={setFilterZoneId}
+        minCapacity={filterMinCapacity}
+        onMinCapacityChange={setFilterMinCapacity}
+      />
 
       <div style={{ flex: 1, overflow: 'hidden' }} ref={scrollRef}>
         <ScrollArea h="100%" type="auto" offsetScrollbars>
@@ -297,7 +531,6 @@ export function TimelineGrid({
                 borderRight: '1px solid var(--mantine-color-gray-2)',
               }}
             >
-              {/* Header spacer */}
               <div
                 style={{
                   height: headerH,
@@ -311,77 +544,67 @@ export function TimelineGrid({
                   zIndex: 12,
                 }}
               >
-                <Text size="xs" fw={700} c="dimmed" style={{ fontSize: isMobile ? 9 : undefined }}>
-                  {isMobile ? '#' : 'Sto'}
-                </Text>
+                <Text size="xs" fw={700} c="dimmed">Sto</Text>
               </div>
 
-              {/* Table labels per zone */}
               {groupedEntries.map((group, groupIdx) => {
                 const zoneColor = ZONE_COLORS[groupIdx % ZONE_COLORS.length];
                 return (
-                <div key={group.zone.id}>
-                  <div
-                    style={{
-                      height: zoneHeaderH,
-                      display: 'flex',
-                      alignItems: 'center',
-                      paddingLeft: isMobile ? 4 : 8,
-                      backgroundColor: zoneColor.bg,
-                      borderBottom: `1px solid ${zoneColor.border}`,
-                      overflow: 'visible',
-                      position: 'relative',
-                      zIndex: 11,
-                    }}
-                  >
-                    <Text
-                      fw={700}
-                      style={{
-                        color: zoneColor.text,
-                        whiteSpace: 'nowrap',
-                        fontSize: isMobile ? 10 : 12,
-                        letterSpacing: 0.5,
-                      }}
-                    >
-                      {group.zone.name}
-                    </Text>
-                  </div>
-
-                  {group.entries.map((entry) => (
+                  <div key={group.zone.id}>
                     <div
-                      key={entry.table.id}
                       style={{
-                        height: rowH,
+                        height: zoneHeaderH,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        borderBottom: '1px solid var(--mantine-color-gray-2)',
+                        paddingLeft: 8,
+                        backgroundColor: zoneColor.bg,
+                        borderBottom: `1px solid ${zoneColor.border}`,
+                        overflow: 'visible',
+                        position: 'relative',
+                        zIndex: 11,
                       }}
                     >
                       <Text
                         fw={700}
-                        style={{ fontSize: isMobile ? 11 : 13 }}
+                        style={{
+                          color: zoneColor.text,
+                          whiteSpace: 'nowrap',
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                        }}
                       >
-                        {entry.table.table_number}
+                        {group.zone.name}
                       </Text>
-                      {!isMobile && (
+                    </div>
+                    {group.entries.map((entry) => (
+                      <div
+                        key={entry.table.id}
+                        style={{
+                          height: rowH,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderBottom: '1px solid var(--mantine-color-gray-2)',
+                        }}
+                      >
+                        <Text fw={700} style={{ fontSize: 13 }}>
+                          {entry.table.table_number}
+                        </Text>
                         <Group gap={2} ml={4}>
                           <IconUsers size={12} color="var(--mantine-color-dimmed)" />
                           <Text size="xs" c="dimmed">
                             {entry.table.capacity}
                           </Text>
                         </Group>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                      </div>
+                    ))}
+                  </div>
                 );
               })}
             </div>
 
             {/* Grid area */}
             <div style={{ flex: 1, position: 'relative' }}>
-              {/* Time header */}
               <div
                 style={{
                   display: 'flex',
@@ -409,49 +632,44 @@ export function TimelineGrid({
                           : '1px solid var(--mantine-color-gray-2)',
                       }}
                     >
-                      {/* Mobile: only full hours; Desktop: all slots */}
-                      {(isMobile ? isFullHour : true) && (
-                        <Text
-                          c={isFullHour ? 'dark' : 'dimmed'}
-                          fw={isFullHour ? 700 : 500}
-                          style={{ fontSize: isMobile ? 10 : 12 }}
-                        >
-                          {isMobile ? slot.substring(0, 2) : slot}
-                        </Text>
-                      )}
+                      <Text
+                        c={isFullHour ? 'dark' : 'dimmed'}
+                        fw={isFullHour ? 700 : 500}
+                        style={{ fontSize: 12 }}
+                      >
+                        {slot}
+                      </Text>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Rows */}
               {groupedEntries.map((group, groupIdx) => {
                 const zoneColor = ZONE_COLORS[groupIdx % ZONE_COLORS.length];
                 return (
-                <div key={group.zone.id}>
-                  <div
-                    style={{
-                      height: zoneHeaderH,
-                      backgroundColor: zoneColor.bg,
-                      borderBottom: `1px solid ${zoneColor.border}`,
-                    }}
-                  />
-
-                  {group.entries.map((entry) => (
-                    <TimelineRow
-                      key={entry.table.id}
-                      entry={entry}
-                      timeSlots={timeSlots}
-                      openTime={openTime}
-                      slotWidth={slotWidth}
-                      rowHeight={rowH}
-                      isMobile={isMobile}
-                      searchTerm={search}
-                      onSlotClick={handleSlotClick}
-                      onViewReservation={onViewReservation}
+                  <div key={group.zone.id}>
+                    <div
+                      style={{
+                        height: zoneHeaderH,
+                        backgroundColor: zoneColor.bg,
+                        borderBottom: `1px solid ${zoneColor.border}`,
+                      }}
                     />
-                  ))}
-                </div>
+                    {group.entries.map((entry) => (
+                      <TimelineRow
+                        key={entry.table.id}
+                        entry={entry}
+                        timeSlots={timeSlots}
+                        openTime={openTime}
+                        slotWidth={slotWidth}
+                        rowHeight={rowH}
+                        isMobile={false}
+                        searchTerm={search}
+                        onSlotClick={handleSlotClick}
+                        onViewReservation={onViewReservation}
+                      />
+                    ))}
+                  </div>
                 );
               })}
 
@@ -474,11 +692,11 @@ export function TimelineGrid({
                     style={{
                       position: 'sticky',
                       top: 0,
-                      width: isMobile ? 8 : 6,
-                      height: isMobile ? 8 : 6,
+                      width: 6,
+                      height: 6,
                       borderRadius: '50%',
                       backgroundColor: 'var(--mantine-color-teal-6)',
-                      marginLeft: isMobile ? -3.5 : -2.5,
+                      marginLeft: -2.5,
                     }}
                   />
                 </div>
@@ -560,12 +778,11 @@ function TimelineRow({
               borderLeft: isFullHour
                 ? '1px solid var(--mantine-color-gray-3)'
                 : '1px solid var(--mantine-color-gray-1)',
-              // On mobile: stronger green for free slots so availability pops
               backgroundColor: isFree
                 ? (isMobile ? 'rgba(76, 175, 80, 0.12)' : 'rgba(76, 175, 80, 0.05)')
                 : 'transparent',
               cursor: isFree ? 'pointer' : 'default',
-              transition: 'background-color 0.15s',
+              transition: isMobile ? undefined : 'background-color 0.15s',
             }}
             onClick={() => {
               if (isFree) onSlotClick(entry.table.id, slot);

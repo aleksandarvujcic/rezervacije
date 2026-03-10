@@ -85,3 +85,18 @@ export interface WorkingHours {
   close_time: string;
   is_closed: boolean;
 }
+
+export type Permission =
+  | 'create_reservation'
+  | 'create_walkin'
+  | 'delete_reservation'
+  | 'transfer_table'
+  | 'status_no_show'
+  | 'status_otkazana'
+  | 'status_odlozena';
+
+export interface RolePermission {
+  role: string;
+  permission: Permission;
+  allowed: boolean;
+}

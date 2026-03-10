@@ -1,10 +1,11 @@
 import { Menu, Box } from '@mantine/core';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
-import type { Reservation, ReservationStatus } from '../../api/types';
+import type { Reservation, ReservationStatus, Permission } from '../../api/types';
 import { StatusBadge } from '../common/StatusBadge';
 import { useUpdateReservation } from '../../hooks/useReservations';
 import { VALID_TRANSITIONS, STATUS_ACTION_LABELS, STATUS_COLORS } from '../../config/statusConfig';
+import { useHasPermission } from '../../hooks/usePermissions';
 
 interface StatusChangeMenuProps {
   reservation: Reservation;
@@ -14,12 +15,25 @@ interface StatusChangeMenuProps {
 // Statuses that require confirmation before applying
 const CONFIRM_STATUSES: Set<ReservationStatus> = new Set(['otkazana', 'no_show']);
 
+// Map status transitions to permission keys
+const STATUS_PERMISSION_MAP: Partial<Record<ReservationStatus, Permission>> = {
+  no_show: 'status_no_show',
+  otkazana: 'status_otkazana',
+  odlozena: 'status_odlozena',
+};
+
 export function StatusChangeMenu({
   reservation,
   onStatusChange,
 }: StatusChangeMenuProps) {
   const updateMutation = useUpdateReservation();
-  const nextStatuses = VALID_TRANSITIONS[reservation.status] || [];
+  const hasPermission = useHasPermission();
+
+  const nextStatuses = (VALID_TRANSITIONS[reservation.status] || [])
+    .filter((s) => {
+      const perm = STATUS_PERMISSION_MAP[s];
+      return !perm || hasPermission(perm);
+    });
 
   const doChange = (newStatus: ReservationStatus) => {
     updateMutation.mutate(

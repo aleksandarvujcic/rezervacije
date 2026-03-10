@@ -27,6 +27,8 @@ import { useAuthStore } from '../../stores/authStore';
 
 interface AppLayoutProps {
   children: ReactNode;
+  /** Custom content to render in the header on mobile (replaces default title) */
+  mobileHeaderCenter?: ReactNode;
 }
 
 const TABS = [
@@ -35,7 +37,7 @@ const TABS = [
   { to: '/admin', label: 'Admin', icon: IconSettings, managerOnly: true },
 ];
 
-export function AppLayout({ children }: AppLayoutProps) {
+export function AppLayout({ children, mobileHeaderCenter }: AppLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -62,17 +64,11 @@ export function AppLayout({ children }: AppLayoutProps) {
       padding={8}
     >
       <AppShell.Header style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <Group h="100%" px="md" justify="space-between">
-          <Text fw={800} size="md" c="teal.7">
-            Rezervacije
-          </Text>
-          <Group gap="sm">
-            {!isMobile && user && (
-              <Badge variant="light" color="teal" size="md">
-                {user.display_name}
-              </Badge>
-            )}
-            {isMobile ? (
+        <Group h="100%" px={isMobile ? 'xs' : 'md'} justify="space-between" wrap="nowrap" gap={4}>
+          {isMobile && mobileHeaderCenter ? (
+            /* On mobile with custom header: show compact title + custom center + logout */
+            <>
+              {mobileHeaderCenter}
               <ActionIcon
                 variant="subtle"
                 size="sm"
@@ -81,17 +77,40 @@ export function AppLayout({ children }: AppLayoutProps) {
               >
                 <IconLogout size={18} />
               </ActionIcon>
-            ) : (
-              <Button
-                variant="subtle"
-                size="xs"
-                leftSection={<IconLogout size={16} />}
-                onClick={handleLogout}
-              >
-                Odjava
-              </Button>
-            )}
-          </Group>
+            </>
+          ) : (
+            <>
+              <Text fw={800} size="md" c="teal.7">
+                Rezervacije
+              </Text>
+              <Group gap="sm">
+                {!isMobile && user && (
+                  <Badge variant="light" color="teal" size="md">
+                    {user.display_name}
+                  </Badge>
+                )}
+                {isMobile ? (
+                  <ActionIcon
+                    variant="subtle"
+                    size="sm"
+                    onClick={handleLogout}
+                    aria-label="Odjava"
+                  >
+                    <IconLogout size={18} />
+                  </ActionIcon>
+                ) : (
+                  <Button
+                    variant="subtle"
+                    size="xs"
+                    leftSection={<IconLogout size={16} />}
+                    onClick={handleLogout}
+                  >
+                    Odjava
+                  </Button>
+                )}
+              </Group>
+            </>
+          )}
         </Group>
       </AppShell.Header>
 

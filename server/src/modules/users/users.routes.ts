@@ -51,6 +51,11 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         throw new ValidationError('username, password, display_name, and role are required');
       }
 
+      // S6: Password complexity validation
+      if (password.length < 8) {
+        throw new ValidationError('Lozinka mora imati najmanje 8 karaktera');
+      }
+
       const validRoles = ['owner', 'manager', 'waiter'];
       if (!validRoles.includes(role)) {
         throw new ValidationError(`role must be one of: ${validRoles.join(', ')}`);
@@ -112,6 +117,10 @@ export default async function usersRoutes(fastify: FastifyInstance) {
       }
 
       if (password !== undefined) {
+        // S6: Password complexity validation
+        if (password.length < 8) {
+          throw new ValidationError('Lozinka mora imati najmanje 8 karaktera');
+        }
         const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
         updates.push(`password_hash = $${paramIndex++}`);
         values.push(password_hash);

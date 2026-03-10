@@ -12,6 +12,9 @@ import {
   Paper,
   Box,
   Select,
+  SimpleGrid,
+  UnstyledButton,
+  Alert,
 } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
@@ -34,12 +37,14 @@ import {
   IconCheck,
   IconNotes,
   IconToolsKitchen2,
+  IconArrowsExchange,
 } from '@tabler/icons-react';
-import type { Reservation, ReservationStatus, ReservationType } from '../../api/types';
+import type { Reservation, ReservationStatus, ReservationType, Table } from '../../api/types';
 import { StatusBadge } from '../common/StatusBadge';
-import { useUpdateReservation, useDeleteReservation } from '../../hooks/useReservations';
+import { useUpdateReservation, useDeleteReservation, useAvailability } from '../../hooks/useReservations';
 import { VALID_TRANSITIONS, STATUS_ACTION_LABELS } from '../../config/statusConfig';
-import { workingHoursApi } from '../../api/endpoints';
+import { workingHoursApi, zonesApi, tablesApi } from '../../api/endpoints';
+import { useHasPermission } from '../../hooks/usePermissions';
 
 const TYPE_LABELS: Record<ReservationType, string> = {
   standard: 'Standard',
@@ -51,11 +56,11 @@ const STATUS_ICON_MAP: Record<ReservationStatus, { icon: typeof IconCheck; color
   nova: { icon: IconCheck, color: 'blue' },
   potvrdjena: { icon: IconCheck, color: 'blue' },
   seated: { icon: IconArmchair, color: 'orange' },
-  zavrsena: { icon: IconFlag, color: 'green' },
-  otkazana: { icon: IconX, color: 'red' },
+  zavrsena: { icon: IconFlag, color: 'gray' },
+  otkazana: { icon: IconX, color: 'pink' },
   no_show: { icon: IconAlertCircle, color: 'red' },
-  waitlist: { icon: IconClock, color: 'yellow' },
-  odlozena: { icon: IconHourglass, color: 'blue' },
+  waitlist: { icon: IconClock, color: 'grape' },
+  odlozena: { icon: IconHourglass, color: 'yellow' },
 };
 
 interface ReservationDrawerProps {
@@ -71,16 +76,75 @@ export function ReservationDrawer({
   onClose,
   onEdit,
 }: ReservationDrawerProps) {
+  const hasPermission = useHasPermission();
   const updateMutation = useUpdateReservation();
   const deleteMutation = useDeleteReservation();
   const isMobile = useMediaQuery('(max-width: 48em)');
   const [postponeTime, setPostponeTime] = useState<string | null>(null);
   const [showPostpone, setShowPostpone] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferTableIds, setTransferTableIds] = useState<string[]>([]);
 
   const { data: workingHours } = useQuery({
     queryKey: ['working-hours'],
     queryFn: () => workingHoursApi.get(),
   });
+
+  // Data for transfer table feature
+  const { data: zones } = useQuery({
+    queryKey: ['zones'],
+    queryFn: () => zonesApi.list(),
+    enabled: showTransfer,
+  });
+
+  const allZoneIds = zones?.map((z) => z.id) || [];
+  const { data: allTables } = useQuery({
+    queryKey: ['all-tables', allZoneIds],
+    queryFn: async () => {
+      if (!zones || zones.length === 0) return [];
+      const results = await Promise.all(zones.map((z) => tablesApi.listByZone(z.id)));
+      return results.flat();
+    },
+    enabled: showTransfer && !!zones && zones.length > 0,
+  });
+
+  const availabilityParams = useMemo(() => {
+    if (!showTransfer || !reservation) return null;
+    return {
+      date: dayjs(reservation.date).format('YYYY-MM-DD'),
+      time: reservation.start_time.substring(0, 5),
+      duration: reservation.duration_minutes,
+      guests: 0,
+      exclude_reservation_id: reservation.id,
+    };
+  }, [showTransfer, reservation]);
+
+  const { data: availability, isLoading: availabilityLoading } = useAvailability(availabilityParams);
+
+  const availableIds = useMemo(
+    () => new Set(availability?.available_tables?.map((t: Table) => t.id) || []),
+    [availability]
+  );
+
+  const activeZones = useMemo(
+    () => (zones ?? []).filter((z) => z.is_active).sort((a, b) => a.sort_order - b.sort_order),
+    [zones]
+  );
+
+  const tablesByZone = useMemo(() => {
+    const tables = (allTables ?? []).filter((t) => t.is_active);
+    const grouped: Record<number, typeof tables> = {};
+    for (const t of tables) {
+      if (!grouped[t.zone_id]) grouped[t.zone_id] = [];
+      grouped[t.zone_id].push(t);
+    }
+    for (const zoneId of Object.keys(grouped)) {
+      grouped[Number(zoneId)].sort((a, b) =>
+        String(a.table_number).localeCompare(String(b.table_number), undefined, { numeric: true })
+      );
+    }
+    return grouped;
+  }, [allTables]);
 
   // Generate time slots after current reservation time
   const laterTimeSlots = useMemo(() => {
@@ -106,16 +170,25 @@ export function ReservationDrawer({
 
   const formatTime = (time: string) => time.slice(0, 5);
   const nextStatuses = VALID_TRANSITIONS[reservation.status] || [];
-  // Separate odlozena from regular status actions
+  // Separate odlozena from regular status actions; filter by permissions
+  const STATUS_PERM_MAP: Partial<Record<ReservationStatus, import('../../api/types').Permission>> = {
+    no_show: 'status_no_show',
+    otkazana: 'status_otkazana',
+    odlozena: 'status_odlozena',
+  };
   const regularActions = nextStatuses
     .filter((s) => s !== 'odlozena')
+    .filter((s) => {
+      const perm = STATUS_PERM_MAP[s];
+      return !perm || hasPermission(perm);
+    })
     .map((s) => ({
       status: s,
       label: STATUS_ACTION_LABELS[s],
       icon: STATUS_ICON_MAP[s].icon,
       color: STATUS_ICON_MAP[s].color,
     }));
-  const canPostpone = nextStatuses.includes('odlozena');
+  const canPostpone = hasPermission('status_odlozena') && nextStatuses.includes('odlozena');
 
   const DANGEROUS_STATUSES: ReservationStatus[] = ['otkazana', 'no_show'];
 
@@ -208,6 +281,48 @@ export function ReservationDrawer({
     );
   };
 
+  const toggleTransferTable = (tableId: number) => {
+    const idStr = String(tableId);
+    // Single select — clicking a new table replaces the previous selection
+    setTransferTableIds((prev) =>
+      prev.includes(idStr) ? prev.filter((id) => id !== idStr) : [idStr]
+    );
+  };
+
+  const handleTransfer = () => {
+    if (transferTableIds.length === 0) return;
+    updateMutation.mutate(
+      { id: reservation.id, data: { table_ids: transferTableIds.map(Number) } },
+      {
+        onSuccess: () => {
+          const newNumbers = transferTableIds
+            .map((id) => allTables?.find((t) => t.id === Number(id))?.table_number)
+            .filter(Boolean)
+            .join(', ');
+          notifications.show({
+            title: 'Sto promenjen',
+            message: `${reservation.guest_name} prebačen na sto ${newNumbers}`,
+            color: 'green',
+            icon: <IconCheck size={18} />,
+            autoClose: 4000,
+          });
+          onClose();
+          setShowTransfer(false);
+          setTransferTableIds([]);
+        },
+        onError: (error: Error) => {
+          notifications.show({
+            title: 'Transfer nije uspeo',
+            message: error.message || 'Sto nije dostupan u ovom terminu.',
+            color: 'red',
+            icon: <IconX size={18} />,
+            autoClose: 6000,
+          });
+        },
+      }
+    );
+  };
+
   const handleDelete = () => {
     modals.openConfirmModal({
       title: 'Obrisati rezervaciju?',
@@ -255,6 +370,8 @@ export function ReservationDrawer({
         onClose();
         setShowPostpone(false);
         setPostponeTime(null);
+        setShowTransfer(false);
+        setTransferTableIds([]);
       }}
       title={null}
       position={isMobile ? 'bottom' : 'right'}
@@ -407,7 +524,7 @@ export function ReservationDrawer({
               {canPostpone && !showPostpone && (
                 <Button
                   variant="light"
-                  color="teal"
+                  color="yellow"
                   size={isMobile ? 'md' : 'sm'}
                   leftSection={<IconHourglass size={20} />}
                   fullWidth
@@ -456,8 +573,131 @@ export function ReservationDrawer({
           </>
         )}
 
-        {/* Delete */}
-        {!isTerminal && (
+        {/* Transfer table */}
+        {!isTerminal && hasPermission('transfer_table') && (
+          <>
+            <Divider label="Transfer stola" labelPosition="center" />
+            {!showTransfer ? (
+              <Button
+                variant="light"
+                color="teal"
+                size={isMobile ? 'md' : 'sm'}
+                leftSection={<IconArrowsExchange size={20} />}
+                fullWidth
+                onClick={() => {
+                  setShowTransfer(true);
+                  setTransferTableIds([]);
+                }}
+              >
+                Promeni sto
+              </Button>
+            ) : (
+              <Paper p="sm" withBorder radius="md">
+                <Stack gap="xs">
+                  <Text size="sm" fw={600}>Izaberi novi sto:</Text>
+                  {availabilityLoading && (
+                    <Text size="sm" c="dimmed" ta="center">Učitavanje dostupnosti...</Text>
+                  )}
+                  {!availabilityLoading && activeZones.map((zone) => {
+                    const zoneTables = tablesByZone[zone.id];
+                    if (!zoneTables || zoneTables.length === 0) return null;
+                    return (
+                      <div key={zone.id}>
+                        <Text size="xs" fw={600} c="dimmed" mb={4}>
+                          {zone.name}
+                        </Text>
+                        <SimpleGrid cols={{ base: 5, sm: 6 }} spacing={6}>
+                          {zoneTables.map((table) => {
+                            const isFree = availability ? availableIds.has(table.id) : false;
+                            const isSmall = isFree && table.capacity < reservation.guest_count;
+                            const isOccupied = !isFree;
+                            const isSelected = transferTableIds.includes(String(table.id));
+                            return (
+                              <UnstyledButton
+                                key={table.id}
+                                onClick={() => isFree && toggleTransferTable(table.id)}
+                                style={{ cursor: isFree ? 'pointer' : 'default' }}
+                              >
+                                <Paper
+                                  p={4}
+                                  withBorder
+                                  ta="center"
+                                  style={{
+                                    opacity: isOccupied ? 0.4 : 1,
+                                    borderColor: isSelected
+                                      ? 'var(--mantine-color-teal-5)'
+                                      : isSmall
+                                        ? 'var(--mantine-color-orange-4)'
+                                        : isFree
+                                          ? 'var(--mantine-color-green-3)'
+                                          : undefined,
+                                    borderWidth: isSelected ? 2 : 1,
+                                    backgroundColor: isSelected
+                                      ? 'var(--mantine-color-teal-0)'
+                                      : isSmall
+                                        ? 'var(--mantine-color-orange-0)'
+                                        : undefined,
+                                  }}
+                                >
+                                  <Text size="sm" fw={700} lh={1}>
+                                    {table.table_number}
+                                  </Text>
+                                  <Group gap={2} justify="center" style={{ fontSize: 10 }}>
+                                    {isOccupied ? (
+                                      <Text size="xs" c="dimmed" lh={1.2} style={{ fontSize: 10 }}>zauzet</Text>
+                                    ) : (
+                                      <>
+                                        <Text size="xs" c={isSmall ? 'orange.6' : 'dimmed'} lh={1.2} style={{ fontSize: 10 }}>
+                                          {table.capacity}
+                                        </Text>
+                                        <IconUsers size={10} color={isSmall ? 'var(--mantine-color-orange-6)' : 'var(--mantine-color-gray-5)'} />
+                                      </>
+                                    )}
+                                  </Group>
+                                </Paper>
+                              </UnstyledButton>
+                            );
+                          })}
+                        </SimpleGrid>
+                      </div>
+                    );
+                  })}
+                  {transferTableIds.length > 0 && (() => {
+                    const selectedTable = allTables?.find((t) => t.id === Number(transferTableIds[0]));
+                    return selectedTable && selectedTable.capacity < reservation.guest_count ? (
+                      <Alert variant="light" color="orange" icon={<IconAlertCircle size={16} />}>
+                        Sto {selectedTable.table_number} ima {selectedTable.capacity} mesta, a rezervacija je za {reservation.guest_count} gostiju
+                      </Alert>
+                    ) : null;
+                  })()}
+                  <Group grow>
+                    <Button
+                      variant="default"
+                      size="compact-sm"
+                      onClick={() => {
+                        setShowTransfer(false);
+                        setTransferTableIds([]);
+                      }}
+                    >
+                      Odustani
+                    </Button>
+                    <Button
+                      size="compact-sm"
+                      disabled={transferTableIds.length === 0}
+                      onClick={handleTransfer}
+                      loading={updateMutation.isPending}
+                    >
+                      Potvrdi transfer
+                    </Button>
+                  </Group>
+                </Stack>
+              </Paper>
+            )}
+          </>
+        )}
+
+        {/* Delete — only manager/owner */}
+        {!isTerminal && hasPermission('delete_reservation') && (
           <>
             <Divider />
             <Button

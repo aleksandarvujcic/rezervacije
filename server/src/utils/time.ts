@@ -24,3 +24,15 @@ export function validateDateFormat(date: string): boolean {
 export function validateTimeFormat(time: string): boolean {
   return TIME_RE.test(time);
 }
+
+/** Safely format a date from pg (Date object) or string to YYYY-MM-DD without timezone shift */
+export function formatPgDate(d: unknown): string {
+  if (typeof d === 'string') return d;
+  if (d instanceof Date) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return String(d);
+}

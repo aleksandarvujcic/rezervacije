@@ -8,6 +8,7 @@ import type {
   WorkingHours,
   ReservationStatus,
   ReservationType,
+  RolePermission,
 } from './types';
 
 // --- Auth ---
@@ -135,6 +136,7 @@ export interface AvailabilityParams {
   time: string;
   duration: number;
   guests: number;
+  exclude_reservation_id?: number;
 }
 
 export interface AvailabilityResult {
@@ -160,12 +162,16 @@ export interface TimelineEntry {
 
 export const availabilityApi = {
   check: (params: AvailabilityParams) => {
-    const query = new URLSearchParams({
+    const q: Record<string, string> = {
       date: params.date,
       time: params.time,
       duration: String(params.duration),
       guests: String(params.guests),
-    }).toString();
+    };
+    if (params.exclude_reservation_id) {
+      q.exclude_reservation_id = String(params.exclude_reservation_id);
+    }
+    const query = new URLSearchParams(q).toString();
     return apiGet<AvailabilityResult>(`/availability?${query}`);
   },
 
@@ -203,4 +209,13 @@ export const usersApi = {
     apiPatch<User>(`/users/${id}`, data),
 
   delete: (id: number) => apiDelete<void>(`/users/${id}`),
+};
+
+// --- Permissions ---
+
+export const permissionsApi = {
+  list: () => apiGet<RolePermission[]>('/permissions'),
+
+  update: (permissions: RolePermission[]) =>
+    apiPut<RolePermission[]>('/permissions', { permissions }),
 };

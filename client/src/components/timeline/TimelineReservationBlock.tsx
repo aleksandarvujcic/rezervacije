@@ -51,14 +51,14 @@ export function TimelineReservationBlock({
         style={{
           position: 'absolute',
           left,
-          top: 2,
-          bottom: 2,
+          top: 1,
+          bottom: 1,
           width,
           backgroundColor: bgColor,
-          borderRadius: 3,
+          borderRadius: 2,
           cursor: 'pointer',
           overflow: 'hidden',
-          opacity: dimmed ? 0.2 : 0.85,
+          opacity: dimmed ? 0.2 : 0.9,
           border: endingSoon
             ? '1.5px solid #FF5722'
             : '1px solid rgba(0,0,0,0.08)',
@@ -66,18 +66,18 @@ export function TimelineReservationBlock({
           zIndex: 2,
           display: 'flex',
           alignItems: 'center',
-          padding: '0 3px',
+          padding: '0 2px',
         }}
       >
-        {width > 20 && (
+        {width > 18 && (
           <Text
             c="white"
-            fw={600}
+            fw={700}
             truncate
             style={{
-              fontSize: 9,
+              fontSize: 10,
               lineHeight: 1,
-              textShadow: '0 1px 2px rgba(0,0,0,0.4)',
+              textShadow: '0 1px 2px rgba(0,0,0,0.5)',
               whiteSpace: 'nowrap',
             }}
           >

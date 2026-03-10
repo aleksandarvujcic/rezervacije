@@ -9,6 +9,7 @@ interface AvailabilityQuery {
   time?: string;
   duration?: string;
   guests?: string;
+  exclude_reservation_id?: string;
 }
 
 interface TimelineQuery {
@@ -23,7 +24,7 @@ export default async function availabilityRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: AvailabilityQuery }>(
     '/availability',
     async (request, reply) => {
-      const { date, time, duration = '120', guests } = request.query;
+      const { date, time, duration = '120', guests, exclude_reservation_id } = request.query;
 
       if (!date || !time) {
         throw new ValidationError('date and time are required');
@@ -52,16 +53,22 @@ export default async function availabilityRoutes(fastify: FastifyInstance) {
       const { rows: allTables } = await pool.query(tableQuery, tableValues);
 
       // Get occupied table IDs for the time window
-      const { rows: occupied } = await pool.query(
-        `SELECT DISTINCT rt.table_id
+      let occupiedQuery = `
+        SELECT DISTINCT rt.table_id
          FROM reservation_tables rt
          JOIN reservations r ON r.id = rt.reservation_id
          WHERE r.date = $1
            AND r.status NOT IN ('otkazana', 'no_show', 'zavrsena')
            AND r.start_time < $2
-           AND r.end_time > $3`,
-        [date, end_time, time]
-      );
+           AND r.end_time > $3`;
+      const occupiedValues: unknown[] = [date, end_time, time];
+
+      if (exclude_reservation_id) {
+        occupiedQuery += ` AND r.id != $4`;
+        occupiedValues.push(parseInt(exclude_reservation_id));
+      }
+
+      const { rows: occupied } = await pool.query(occupiedQuery, occupiedValues);
 
       const occupiedIds = new Set(occupied.map((r: { table_id: number }) => r.table_id));
 
@@ -81,15 +88,29 @@ export default async function availabilityRoutes(fastify: FastifyInstance) {
         throw new ValidationError('date is required');
       }
 
-      let tableQuery =
-        'SELECT t.* FROM tables t WHERE t.is_active = true';
+      let tableQuery = `
+        SELECT t.* FROM tables t
+        JOIN zones z ON z.id = t.zone_id
+        WHERE t.is_active = true AND z.is_active = true
+      `;
       const tableValues: unknown[] = [];
+      let paramIdx = 1;
 
       if (zoneId) {
-        tableQuery += ' AND t.zone_id = $1';
+        tableQuery += ` AND t.zone_id = $${paramIdx++}`;
         tableValues.push(zoneId);
       }
-      tableQuery += ' ORDER BY t.table_number::int';
+
+      // Filter out seasonal zones that are not in season for the requested date
+      tableQuery += `
+        AND (z.is_seasonal = false
+             OR (z.season_start IS NOT NULL AND z.season_end IS NOT NULL
+                 AND $${paramIdx}::date >= z.season_start AND $${paramIdx}::date <= z.season_end))
+      `;
+      tableValues.push(date);
+      paramIdx++;
+
+      tableQuery += ' ORDER BY z.sort_order, t.table_number::int';
 
       const { rows: tables } = await pool.query(tableQuery, tableValues);
 

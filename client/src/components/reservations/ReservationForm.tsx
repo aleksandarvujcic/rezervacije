@@ -185,9 +185,9 @@ export function ReservationForm({
       date: formDate,
       time: form.values.start_time,
       duration: parseInt(form.values.duration_minutes, 10),
-      guests: form.values.guest_count,
+      guests: 0,
     };
-  }, [formDate, form.values.start_time, form.values.duration_minutes, form.values.guest_count]);
+  }, [formDate, form.values.start_time, form.values.duration_minutes]);
 
   const { data: availability } = useAvailability(availabilityParams);
 
@@ -301,9 +301,45 @@ export function ReservationForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opened, reservation, date, tableIds, startTime]);
 
+  // U1: Midnight crossing check + U2: Long reservation warning
+  const durationWarning = useMemo(() => {
+    const dur = parseInt(form.values.duration_minutes, 10);
+    if (!form.values.start_time || isNaN(dur)) return null;
+    const [h, m] = form.values.start_time.split(':').map(Number);
+    const totalMinutes = h * 60 + m + dur;
+    const endH = Math.floor(totalMinutes / 60) % 24;
+    const endM = totalMinutes % 60;
+    const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+    if (endTime <= form.values.start_time && endTime !== '00:00') {
+      return 'Rezervacija prelazi ponoć i neće biti prihvaćena. Skratite trajanje.';
+    }
+    if (dur >= 360) {
+      return `Trajanje od ${dur / 60}h je neuobičajeno dugo. Da li ste sigurni?`;
+    }
+    return null;
+  }, [form.values.start_time, form.values.duration_minutes]);
+
   const handleSubmit = (values: typeof form.values) => {
     const durationMin = parseInt(values.duration_minutes, 10);
     const formattedDate = dayjs(values.date).format('YYYY-MM-DD');
+
+    // U1: Block midnight crossing on client
+    if (values.start_time) {
+      const [h, m] = values.start_time.split(':').map(Number);
+      const totalMinutes = h * 60 + m + durationMin;
+      const endH = Math.floor(totalMinutes / 60) % 24;
+      const endM = totalMinutes % 60;
+      const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+      if (endTime <= values.start_time && endTime !== '00:00') {
+        notifications.show({
+          title: 'Greška',
+          message: 'Rezervacija ne može prelaziti ponoć. Skratite trajanje.',
+          color: 'red',
+          icon: <IconX size={18} />,
+        });
+        return;
+      }
+    }
 
     const payload = {
       reservation_type: values.reservation_type,
@@ -420,7 +456,12 @@ export function ReservationForm({
           />
 
           {/* Row 4: Zone-grouped table selection */}
-          <Text size="sm" fw={600}>Izbor stolova</Text>
+          <Text size="sm" fw={600}>
+            Izbor stolova <Text span c="red" size="sm">*</Text>
+          </Text>
+          {form.errors.table_ids && (
+            <Text size="xs" c="red">{form.errors.table_ids}</Text>
+          )}
           {canShowTables ? (
             <Stack gap="xs">
               {activeZones.map((zone) => {
@@ -436,6 +477,7 @@ export function ReservationForm({
                       {zoneTables.map((table) => {
                         const isAvailable = availableIds.size === 0 || availableIds.has(table.id);
                         const isSelected = form.values.table_ids.includes(String(table.id));
+                        const isSmall = isAvailable && table.capacity < form.values.guest_count;
                         return (
                           <UnstyledButton
                             key={table.id}
@@ -450,21 +492,34 @@ export function ReservationForm({
                                 opacity: isAvailable ? 1 : 0.4,
                                 borderColor: isSelected
                                   ? 'var(--mantine-color-teal-5)'
-                                  : isAvailable
-                                    ? 'var(--mantine-color-green-3)'
-                                    : undefined,
+                                  : isSmall
+                                    ? 'var(--mantine-color-orange-4)'
+                                    : isAvailable
+                                      ? 'var(--mantine-color-green-3)'
+                                      : undefined,
                                 borderWidth: isSelected ? 2 : 1,
                                 backgroundColor: isSelected
                                   ? 'var(--mantine-color-teal-0)'
-                                  : undefined,
+                                  : isSmall
+                                    ? 'var(--mantine-color-orange-0)'
+                                    : undefined,
                               }}
                             >
                               <Text size="sm" fw={700} lh={1}>
                                 {table.table_number}
                               </Text>
-                              <Text size="xs" c="dimmed" lh={1.2} style={{ fontSize: 10 }}>
-                                {isAvailable ? `${table.capacity}m` : 'zauzet'}
-                              </Text>
+                              <Group gap={2} justify="center" style={{ fontSize: 10 }}>
+                                {!isAvailable ? (
+                                  <Text size="xs" c="dimmed" lh={1.2} style={{ fontSize: 10 }}>zauzet</Text>
+                                ) : (
+                                  <>
+                                    <Text size="xs" c={isSmall ? 'orange.6' : 'dimmed'} lh={1.2} style={{ fontSize: 10 }}>
+                                      {table.capacity}
+                                    </Text>
+                                    <IconUsers size={10} color={isSmall ? 'var(--mantine-color-orange-6)' : 'var(--mantine-color-gray-5)'} />
+                                  </>
+                                )}
+                              </Group>
                             </Paper>
                           </UnstyledButton>
                         );
@@ -507,6 +562,17 @@ export function ReservationForm({
               icon={<IconAlertTriangle size={16} />}
             >
               Broj gostiju ({form.values.guest_count}) prelazi kapacitet izabranih stolova ({selectedCapacity} mesta)
+            </Alert>
+          )}
+
+          {/* U1/U2: Midnight crossing / long duration warning */}
+          {durationWarning && (
+            <Alert
+              variant="light"
+              color={durationWarning.includes('ponoć') ? 'red' : 'orange'}
+              icon={<IconAlertTriangle size={16} />}
+            >
+              {durationWarning}
             </Alert>
           )}
 

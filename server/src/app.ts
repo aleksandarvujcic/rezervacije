@@ -19,6 +19,7 @@ import workingHoursRoutes from './modules/working-hours/working-hours.routes.js'
 import reservationsRoutes from './modules/reservations/reservations.routes.js';
 import availabilityRoutes from './modules/availability/availability.routes.js';
 import eventsRoutes from './modules/events/events.routes.js';
+import permissionsRoutes from './modules/permissions/permissions.routes.js';
 import { AppError } from './utils/errors.js';
 import { pool } from './db/pool.js';
 
@@ -33,9 +34,11 @@ export async function buildApp() {
     contentSecurityPolicy: false, // CSP managed by frontend
   });
 
-  // Rate limiting (K10)
+  // Rate limiting (K10 + S3)
   await fastify.register(rateLimit, {
-    global: false, // only apply to specific routes
+    global: true,
+    max: 100,
+    timeWindow: '1 minute',
   });
 
   // Register plugins
@@ -63,6 +66,7 @@ export async function buildApp() {
   await fastify.register(reservationsRoutes, { prefix: '/api/reservations' });
   await fastify.register(availabilityRoutes, { prefix: '/api' });
   await fastify.register(eventsRoutes, { prefix: '/api/events' });
+  await fastify.register(permissionsRoutes, { prefix: '/api/permissions' });
 
   // Serve client static files in production
   const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -70,12 +74,16 @@ export async function buildApp() {
     await fastify.register(fastifyStatic, {
       root: clientDist,
       prefix: '/',
-      wildcard: false,
+      wildcard: true,
     });
 
-    // SPA fallback: non-API routes serve index.html
+    // SPA fallback: non-API and non-asset routes serve index.html
     fastify.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api')) {
+        return reply.status(404).send({ error: 'Not found', statusCode: 404 });
+      }
+      // Don't serve index.html for asset requests (JS, CSS, images, fonts)
+      if (request.url.startsWith('/assets/')) {
         return reply.status(404).send({ error: 'Not found', statusCode: 404 });
       }
       return reply.sendFile('index.html');

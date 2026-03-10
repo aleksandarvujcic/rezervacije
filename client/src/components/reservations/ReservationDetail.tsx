@@ -18,6 +18,7 @@ import {
   IconX,
   IconAlertCircle,
   IconClock,
+  IconHourglass,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import type { Reservation, ReservationStatus, ReservationType } from '../../api/types';
@@ -35,11 +36,11 @@ const STATUS_ICON_MAP: Record<ReservationStatus, { icon: typeof IconCheck; color
   nova: { icon: IconCheck, color: 'blue' },
   potvrdjena: { icon: IconCheck, color: 'blue' },
   seated: { icon: IconArmchair, color: 'orange' },
-  zavrsena: { icon: IconFlag, color: 'green' },
-  otkazana: { icon: IconX, color: 'red' },
+  zavrsena: { icon: IconFlag, color: 'gray' },
+  otkazana: { icon: IconX, color: 'pink' },
   no_show: { icon: IconAlertCircle, color: 'red' },
-  waitlist: { icon: IconCheck, color: 'blue' },
-  odlozena: { icon: IconClock, color: 'violet' },
+  waitlist: { icon: IconClock, color: 'grape' },
+  odlozena: { icon: IconHourglass, color: 'yellow' },
 };
 
 interface ReservationDetailProps {

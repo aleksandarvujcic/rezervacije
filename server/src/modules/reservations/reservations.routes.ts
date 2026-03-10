@@ -1,16 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import { pool, withTransaction } from '../../db/pool.js';
-import { authenticate, requireRole } from '../../middleware/auth.js';
+import { authenticate } from '../../middleware/auth.js';
 import type { AuthUser } from '../../middleware/auth.js';
+import { requirePermission, hasPermission } from '../../middleware/permissions.js';
 import {
   ValidationError,
   NotFoundError,
-  ConflictError,
   ForbiddenError,
 } from '../../utils/errors.js';
 import { emitEvent } from '../events/events.routes.js';
-import { normalizeTime, addMinutesToTime, validateDateFormat, validateTimeFormat } from '../../utils/time.js';
+import { normalizeTime, addMinutesToTime, validateDateFormat, validateTimeFormat, formatPgDate } from '../../utils/time.js';
 import { isValidStatus, isValidTransition } from '../../utils/statusTransitions.js';
+import { checkTableOverlap } from '../../utils/overlapCheck.js';
+import { writeAuditLog } from '../../utils/auditLog.js';
 
 // ---------- Types ----------
 
@@ -145,6 +147,13 @@ async function checkCapacity(
   }
 }
 
+/** Map status to the permission required for that status transition */
+const STATUS_PERMISSION_MAP: Record<string, string> = {
+  otkazana: 'status_otkazana',
+  no_show: 'status_no_show',
+  odlozena: 'status_odlozena',
+};
+
 // ---------- Routes ----------
 
 export default async function reservationsRoutes(fastify: FastifyInstance) {
@@ -209,9 +218,10 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // POST / - create reservation
+  // POST / - create reservation (S1: permission enforced)
   fastify.post<{ Body: CreateBody }>(
     '/',
+    { preHandler: [requirePermission('create_reservation')] },
     async (request, reply) => {
       const {
         guest_name,
@@ -307,30 +317,8 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
           }
         }
 
-        // Check availability with SELECT ... FOR UPDATE
-        const tablePlaceholders = table_ids
-          .map((_, i) => `$${i + 1}`)
-          .join(', ');
-
-        const { rows: conflicts } = await client.query(
-          `SELECT rt.table_id
-           FROM reservation_tables rt
-           JOIN reservations r ON r.id = rt.reservation_id
-           WHERE rt.table_id IN (${tablePlaceholders})
-             AND r.date = $${table_ids.length + 1}
-             AND r.status NOT IN ('otkazana', 'no_show', 'zavrsena')
-             AND r.start_time < $${table_ids.length + 2}
-             AND r.end_time > $${table_ids.length + 3}
-           FOR UPDATE`,
-          [...table_ids, date, end_time, start_time]
-        );
-
-        if (conflicts.length > 0) {
-          const conflictIds = [...new Set(conflicts.map((r: { table_id: number }) => r.table_id))];
-          throw new ConflictError(
-            `Tables ${conflictIds.join(', ')} are not available for the requested time`
-          );
-        }
+        // A5: Centralized overlap check
+        await checkTableOverlap(client, table_ids, date, start_time, end_time);
 
         // Create reservation
         const { rows: resRows } = await client.query(
@@ -365,6 +353,23 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
             [reservation.id, tableId]
           );
         }
+
+        // Audit log
+        await writeAuditLog({
+          userId: user.id,
+          action: 'create',
+          entityType: 'reservation',
+          entityId: reservation.id,
+          details: {
+            guest_name,
+            guest_count,
+            date,
+            start_time,
+            duration_minutes,
+            table_ids,
+            reservation_type,
+          },
+        }, client);
 
         return reservation;
       });
@@ -437,6 +442,33 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
             throw new ValidationError(
               `Nedozvoljena promena statusa: ${res.status} → ${status}`
             );
+          }
+
+          // S1: Check permission for restricted status changes
+          const requiredPermission = STATUS_PERMISSION_MAP[status];
+          if (requiredPermission) {
+            const allowed = await hasPermission(user.role, requiredPermission as any);
+            if (!allowed) {
+              throw new ForbiddenError(`Nemate dozvolu za promenu statusa u "${status}"`);
+            }
+          }
+        }
+
+        // S1: Check permission for table transfer
+        if (table_ids && table_ids.length > 0) {
+          const currentTableIds = (await client.query(
+            'SELECT table_id FROM reservation_tables WHERE reservation_id = $1',
+            [id]
+          )).rows.map((r: { table_id: number }) => r.table_id);
+
+          const tablesChanged = table_ids.length !== currentTableIds.length ||
+            !table_ids.every((tid) => currentTableIds.includes(tid));
+
+          if (tablesChanged) {
+            const allowed = await hasPermission(user.role, 'transfer_table');
+            if (!allowed) {
+              throw new ForbiddenError('Nemate dozvolu za transfer stola');
+            }
           }
         }
 
@@ -540,9 +572,8 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
           );
         }
 
-        // Check overlap when time changes (even without new table_ids)
+        // A5: Centralized overlap check when time changes (without new table_ids)
         if ((start_time || duration_minutes) && !(table_ids && table_ids.length > 0)) {
-          // Get current tables for this reservation
           const { rows: currentTables } = await client.query(
             'SELECT table_id FROM reservation_tables WHERE reservation_id = $1',
             [id]
@@ -550,8 +581,7 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
           const currentTableIds = currentTables.map((t: { table_id: number }) => t.table_id);
 
           if (currentTableIds.length > 0) {
-            const effectiveDate =
-              typeof newDate === 'string' ? newDate : new Date(newDate).toISOString().slice(0, 10);
+            const effectiveDate = formatPgDate(newDate);
             const effectiveEndTime =
               typeof newEndTime === 'string' ? newEndTime : newEndTime.toString().slice(0, 5);
             const effectiveStartTime =
@@ -559,40 +589,15 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
                 ? newStartTime
                 : newStartTime.toString().slice(0, 5);
 
-            const tablePlaceholders = currentTableIds
-              .map((_: number, i: number) => `$${i + 1}`)
-              .join(', ');
-            const offset = currentTableIds.length;
-
-            const { rows: conflicts } = await client.query(
-              `SELECT rt.table_id
-               FROM reservation_tables rt
-               JOIN reservations r ON r.id = rt.reservation_id
-               WHERE rt.table_id IN (${tablePlaceholders})
-                 AND r.id != $${offset + 1}
-                 AND r.date = $${offset + 2}
-                 AND r.status NOT IN ('otkazana', 'no_show', 'zavrsena')
-                 AND r.start_time < $${offset + 3}
-                 AND r.end_time > $${offset + 4}
-               FOR UPDATE`,
-              [...currentTableIds, id, effectiveDate, effectiveEndTime, effectiveStartTime]
+            await checkTableOverlap(
+              client, currentTableIds, effectiveDate, effectiveStartTime, effectiveEndTime, parseInt(id)
             );
-
-            if (conflicts.length > 0) {
-              const conflictIds = [
-                ...new Set(conflicts.map((r: { table_id: number }) => r.table_id)),
-              ];
-              throw new ConflictError(
-                `Stolovi ${conflictIds.join(', ')} nisu dostupni u trazenom terminu`
-              );
-            }
           }
         }
 
         // Reassign tables if provided
         if (table_ids && table_ids.length > 0) {
-          const effectiveDate =
-            typeof newDate === 'string' ? newDate : new Date(newDate).toISOString().slice(0, 10);
+          const effectiveDate = formatPgDate(newDate);
           const effectiveEndTime =
             typeof newEndTime === 'string' ? newEndTime : newEndTime.toString().slice(0, 5);
           const effectiveStartTime =
@@ -600,34 +605,10 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
               ? newStartTime
               : newStartTime.toString().slice(0, 5);
 
-          // Check availability for new tables (excluding current reservation)
-          const tablePlaceholders = table_ids
-            .map((_, i) => `$${i + 1}`)
-            .join(', ');
-          const offset = table_ids.length;
-
-          const { rows: conflicts } = await client.query(
-            `SELECT rt.table_id
-             FROM reservation_tables rt
-             JOIN reservations r ON r.id = rt.reservation_id
-             WHERE rt.table_id IN (${tablePlaceholders})
-               AND r.id != $${offset + 1}
-               AND r.date = $${offset + 2}
-               AND r.status NOT IN ('otkazana', 'no_show', 'zavrsena')
-               AND r.start_time < $${offset + 3}
-               AND r.end_time > $${offset + 4}
-             FOR UPDATE`,
-            [...table_ids, id, effectiveDate, effectiveEndTime, effectiveStartTime]
+          // A5: Centralized overlap check for new tables
+          await checkTableOverlap(
+            client, table_ids, effectiveDate, effectiveStartTime, effectiveEndTime, parseInt(id)
           );
-
-          if (conflicts.length > 0) {
-            const conflictIds = [
-              ...new Set(conflicts.map((r: { table_id: number }) => r.table_id)),
-            ];
-            throw new ConflictError(
-              `Tables ${conflictIds.join(', ')} are not available for the requested time`
-            );
-          }
 
           // Remove old table links and create new ones
           await client.query(
@@ -641,6 +622,30 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
             );
           }
         }
+
+        // Audit log for updates
+        const auditDetails: Record<string, unknown> = {};
+        if (status !== undefined) {
+          auditDetails.old_status = res.status;
+          auditDetails.new_status = status;
+        }
+        if (table_ids) auditDetails.new_table_ids = table_ids;
+        if (guest_name !== undefined) auditDetails.guest_name = guest_name;
+        if (date !== undefined) auditDetails.date = date;
+        if (start_time !== undefined) auditDetails.start_time = start_time;
+        if (duration_minutes !== undefined) auditDetails.duration_minutes = duration_minutes;
+
+        const auditAction = status !== undefined && status !== res.status
+          ? (table_ids ? 'transfer_table' : 'status_change')
+          : (table_ids ? 'transfer_table' : 'update');
+
+        await writeAuditLog({
+          userId: user.id,
+          action: auditAction,
+          entityType: 'reservation',
+          entityId: parseInt(id),
+          details: auditDetails,
+        }, client);
       });
 
       // Fetch updated reservation
@@ -660,15 +665,16 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // DELETE /:id — K5: restricted to manager/owner
+  // DELETE /:id — K5: restricted to manager/owner + S1: permission enforced
   fastify.delete<{ Params: IdParams }>(
     '/:id',
-    { preHandler: [requireRole('manager', 'owner')] },
+    { preHandler: [requirePermission('delete_reservation')] },
     async (request, reply) => {
       const { id } = request.params;
+      const user = request.user as AuthUser;
 
       const { rows } = await pool.query(
-        'SELECT id FROM reservations WHERE id = $1',
+        'SELECT * FROM reservations WHERE id = $1',
         [id]
       );
 
@@ -676,7 +682,23 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
         throw new NotFoundError('Reservation not found');
       }
 
+      const reservation = rows[0];
+
       await pool.query('DELETE FROM reservations WHERE id = $1', [id]);
+
+      // Audit log
+      await writeAuditLog({
+        userId: user.id,
+        action: 'delete',
+        entityType: 'reservation',
+        entityId: parseInt(id),
+        details: {
+          guest_name: reservation.guest_name,
+          date: formatPgDate(reservation.date),
+          start_time: reservation.start_time,
+          status: reservation.status,
+        },
+      });
 
       emitEvent(fastify, 'reservation:change', {
         action: 'deleted',
@@ -687,9 +709,10 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // POST /walkin - quick walk-in
+  // POST /walkin - quick walk-in (S1: permission enforced)
   fastify.post<{ Body: WalkinBody }>(
     '/walkin',
+    { preHandler: [requirePermission('create_walkin')] },
     async (request, reply) => {
       const {
         guest_name,
@@ -734,32 +757,8 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
         // S5: Check capacity
         await checkCapacity(client, table_ids, guest_count);
 
-        // Check availability
-        const tablePlaceholders = table_ids
-          .map((_, i) => `$${i + 1}`)
-          .join(', ');
-
-        const { rows: conflicts } = await client.query(
-          `SELECT rt.table_id
-           FROM reservation_tables rt
-           JOIN reservations r ON r.id = rt.reservation_id
-           WHERE rt.table_id IN (${tablePlaceholders})
-             AND r.date = $${table_ids.length + 1}
-             AND r.status NOT IN ('otkazana', 'no_show', 'zavrsena')
-             AND r.start_time < $${table_ids.length + 2}
-             AND r.end_time > $${table_ids.length + 3}
-           FOR UPDATE`,
-          [...table_ids, date, end_time, start_time]
-        );
-
-        if (conflicts.length > 0) {
-          const conflictIds = [
-            ...new Set(conflicts.map((r: { table_id: number }) => r.table_id)),
-          ];
-          throw new ConflictError(
-            `Tables ${conflictIds.join(', ')} are not available`
-          );
-        }
+        // A5: Centralized overlap check
+        await checkTableOverlap(client, table_ids, date, start_time, end_time);
 
         const { rows: resRows } = await client.query(
           `INSERT INTO reservations
@@ -778,6 +777,23 @@ export default async function reservationsRoutes(fastify: FastifyInstance) {
             [reservation.id, tableId]
           );
         }
+
+        // Audit log
+        await writeAuditLog({
+          userId: user.id,
+          action: 'create',
+          entityType: 'reservation',
+          entityId: reservation.id,
+          details: {
+            guest_name,
+            guest_count,
+            date,
+            start_time,
+            duration_minutes: duration,
+            table_ids,
+            reservation_type: 'walkin',
+          },
+        }, client);
 
         return reservation;
       });

@@ -2,15 +2,15 @@ import type { ReservationStatus } from '../api/types';
 
 /** Hex colors for each reservation status + 'free' pseudo-status */
 export const STATUS_COLORS: Record<ReservationStatus | 'free', string> = {
-  free: '#12B886',
-  nova: '#339AF0',
-  potvrdjena: '#1C7ED6',
-  seated: '#F59F00',
-  zavrsena: '#ADB5BD',
-  otkazana: '#CED4DA',
-  no_show: '#FA5252',
-  waitlist: '#AE3EC9',
-  odlozena: '#5C7CFA',
+  free: '#099268',       // teal-8 — slobodan sto (WCAG AA fix)
+  nova: '#1971C2',       // blue-8 — nova rezervacija
+  potvrdjena: '#1864AB', // blue-9 — potvrđena
+  seated: '#C2255C',     // pink-8 — gost za stolom (WCAG AA fix, was orange)
+  zavrsena: '#868E96',   // gray-6 — završena (neutralna, gotovo)
+  otkazana: '#C92A2A',   // red-8 — otkazana (WCAG AA fix)
+  no_show: '#C92A2A',    // red-8 — no-show (najnegativnija)
+  waitlist: '#862E9C',   // grape-8 — lista čekanja (WCAG AA fix)
+  odlozena: '#E67700',   // yellow-9 — odložena (WCAG AA fix, was #F08C00)
 };
 
 /** Display labels for each status */
@@ -28,6 +28,7 @@ export const STATUS_LABELS: Record<ReservationStatus, string> = {
 /** Options array for Select/MultiSelect components */
 export const STATUS_OPTIONS: { value: ReservationStatus; label: string }[] = [
   { value: 'nova', label: 'Nova' },
+  { value: 'potvrdjena', label: 'Potvrđena' },
   { value: 'seated', label: 'Za stolom' },
   { value: 'zavrsena', label: 'Završena' },
   { value: 'otkazana', label: 'Otkazana' },
@@ -38,9 +39,9 @@ export const STATUS_OPTIONS: { value: ReservationStatus; label: string }[] = [
 
 /** Valid status transitions — bidirectional, always allow revert */
 export const VALID_TRANSITIONS: Record<ReservationStatus, ReservationStatus[]> = {
-  nova: ['seated', 'otkazana', 'odlozena'],
-  potvrdjena: ['seated', 'otkazana', 'odlozena'],
-  seated: ['zavrsena', 'no_show', 'nova'],
+  nova: ['seated', 'no_show', 'otkazana', 'odlozena'],
+  potvrdjena: ['seated', 'no_show', 'otkazana', 'odlozena'],
+  seated: ['zavrsena', 'nova'],
   waitlist: ['nova', 'otkazana'],
   odlozena: ['nova', 'otkazana'],
   zavrsena: ['seated'],

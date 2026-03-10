@@ -11,14 +11,16 @@ import {
   Paper,
   SimpleGrid,
   UnstyledButton,
+  Alert,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { useMediaQuery } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { useQuery } from '@tanstack/react-query';
-import { IconUser, IconUsers, IconClock, IconHourglass, IconCheck, IconX } from '@tabler/icons-react';
+import { IconUser, IconUsers, IconClock, IconHourglass, IconCheck, IconX, IconAlertTriangle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { useWalkin } from '../../hooks/useReservations';
+import type { Table } from '../../api/types';
+import { useWalkin, useAvailability } from '../../hooks/useReservations';
 import { zonesApi, tablesApi, workingHoursApi } from '../../api/endpoints';
 
 interface WalkinFormProps {
@@ -127,6 +129,24 @@ export function WalkinForm({ opened, onClose, tableIds }: WalkinFormProps) {
     },
   });
 
+  // Availability check
+  const availabilityParams = useMemo(() => {
+    if (!form.values.start_time || !form.values.duration_minutes) return null;
+    return {
+      date: dayjs().format('YYYY-MM-DD'),
+      time: form.values.start_time,
+      duration: parseInt(form.values.duration_minutes, 10),
+      guests: 0,
+    };
+  }, [form.values.start_time, form.values.duration_minutes]);
+
+  const { data: availability } = useAvailability(availabilityParams);
+
+  const availableIds = useMemo(
+    () => new Set(availability?.available_tables?.map((t: Table) => t.id) || []),
+    [availability]
+  );
+
   const toggleTable = (tableId: number) => {
     const idStr = String(tableId);
     const current = form.values.table_ids;
@@ -225,7 +245,12 @@ export function WalkinForm({ opened, onClose, tableIds }: WalkinFormProps) {
           </Group>
 
           {/* Zone-grouped table cards */}
-          <Text size="sm" fw={600}>Izbor stolova</Text>
+          <Text size="sm" fw={600}>
+            Izbor stolova <Text span c="red" size="sm">*</Text>
+          </Text>
+          {form.errors.table_ids && (
+            <Text size="xs" c="red">{form.errors.table_ids}</Text>
+          )}
           <Stack gap="xs">
             {activeZones.map((zone) => {
               const zoneTables = tablesByZone[zone.id];
@@ -237,32 +262,51 @@ export function WalkinForm({ opened, onClose, tableIds }: WalkinFormProps) {
                   </Text>
                   <SimpleGrid cols={{ base: 5, sm: 7 }} spacing={6}>
                     {zoneTables.map((table) => {
+                      const isFree = availability ? availableIds.has(table.id) : true;
+                      const isSmall = isFree && table.capacity < form.values.guest_count;
                       const isSelected = form.values.table_ids.includes(String(table.id));
                       return (
                         <UnstyledButton
                           key={table.id}
-                          onClick={() => toggleTable(table.id)}
+                          onClick={() => isFree && toggleTable(table.id)}
+                          style={{ cursor: isFree ? 'pointer' : 'default' }}
                         >
                           <Paper
                             p={4}
                             withBorder
                             ta="center"
                             style={{
+                              opacity: isFree ? 1 : 0.4,
                               borderColor: isSelected
                                 ? 'var(--mantine-color-teal-5)'
-                                : 'var(--mantine-color-green-3)',
+                                : isSmall
+                                  ? 'var(--mantine-color-orange-4)'
+                                  : isFree
+                                    ? 'var(--mantine-color-green-3)'
+                                    : undefined,
                               borderWidth: isSelected ? 2 : 1,
                               backgroundColor: isSelected
                                 ? 'var(--mantine-color-teal-0)'
-                                : undefined,
+                                : isSmall
+                                  ? 'var(--mantine-color-orange-0)'
+                                  : undefined,
                             }}
                           >
                             <Text size="sm" fw={700} lh={1}>
                               {table.table_number}
                             </Text>
-                            <Text size="xs" c="dimmed" lh={1.2} style={{ fontSize: 10 }}>
-                              {table.capacity}m
-                            </Text>
+                            <Group gap={2} justify="center" style={{ fontSize: 10 }}>
+                              {!isFree ? (
+                                <Text size="xs" c="dimmed" lh={1.2} style={{ fontSize: 10 }}>zauzet</Text>
+                              ) : (
+                                <>
+                                  <Text size="xs" c={isSmall ? 'orange.6' : 'dimmed'} lh={1.2} style={{ fontSize: 10 }}>
+                                    {table.capacity}
+                                  </Text>
+                                  <IconUsers size={10} color={isSmall ? 'var(--mantine-color-orange-6)' : 'var(--mantine-color-gray-5)'} />
+                                </>
+                              )}
+                            </Group>
                           </Paper>
                         </UnstyledButton>
                       );
@@ -272,6 +316,20 @@ export function WalkinForm({ opened, onClose, tableIds }: WalkinFormProps) {
               );
             })}
           </Stack>
+
+          {/* Capacity warning */}
+          {form.values.table_ids.length > 0 && (() => {
+            const allTables = tableQueries.data ?? [];
+            const totalCapacity = form.values.table_ids.reduce((sum, id) => {
+              const t = allTables.find((tbl) => tbl.id === Number(id));
+              return sum + (t?.capacity ?? 0);
+            }, 0);
+            return form.values.guest_count > totalCapacity ? (
+              <Alert variant="light" color="orange" icon={<IconAlertTriangle size={16} />}>
+                Broj gostiju ({form.values.guest_count}) prelazi kapacitet izabranih stolova ({totalCapacity} mesta)
+              </Alert>
+            ) : null;
+          })()}
 
           <Group grow={isMobile} justify="flex-end" mt="xs">
             <Button variant="default" onClick={onClose}>

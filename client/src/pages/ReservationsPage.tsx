@@ -43,9 +43,13 @@ import { zonesApi } from '../api/endpoints';
 import { useReservations } from '../hooks/useReservations';
 import { STATUS_OPTIONS } from '../config/statusConfig';
 import type { Reservation, ReservationStatus } from '../api/types';
+import { useHasPermission } from '../hooks/usePermissions';
 
 export function ReservationsPage() {
   const isMobile = useMediaQuery('(max-width: 48em)');
+  const hasPermission = useHasPermission();
+  const canCreateReservation = hasPermission('create_reservation');
+  const canCreateWalkin = hasPermission('create_walkin');
 
   // Date & filters
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
@@ -189,19 +193,23 @@ export function ReservationsPage() {
         <Group justify="space-between" align="flex-end">
           <Title order={2}>Rezervacije</Title>
           <Group gap="xs" visibleFrom="sm">
-            <Button
-              leftSection={<IconPlus size={16} />}
-              onClick={handleNewReservation}
-            >
-              Nova rezervacija
-            </Button>
-            <Button
-              variant="light"
-              leftSection={<IconWalk size={16} />}
-              onClick={walkinFormHandlers.open}
-            >
-              Walk-in
-            </Button>
+            {canCreateReservation && (
+              <Button
+                leftSection={<IconPlus size={16} />}
+                onClick={handleNewReservation}
+              >
+                Nova rezervacija
+              </Button>
+            )}
+            {canCreateWalkin && (
+              <Button
+                variant="light"
+                leftSection={<IconWalk size={16} />}
+                onClick={walkinFormHandlers.open}
+              >
+                Walk-in
+              </Button>
+            )}
             <Button
               variant="subtle"
               leftSection={<IconList size={16} />}
@@ -411,10 +419,10 @@ export function ReservationsPage() {
       </Stack>
 
       {/* Mobile FAB */}
-      {isMobile && (
+      {isMobile && (canCreateReservation || canCreateWalkin) && (
         <MobileFAB
-          onNewReservation={handleNewReservation}
-          onWalkin={walkinFormHandlers.open}
+          onNewReservation={canCreateReservation ? handleNewReservation : undefined}
+          onWalkin={canCreateWalkin ? walkinFormHandlers.open : undefined}
         />
       )}
 

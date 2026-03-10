@@ -86,6 +86,6 @@ export function useAvailability(params: AvailabilityParams | null) {
   return useQuery({
     queryKey: ['availability', params],
     queryFn: () => availabilityApi.check(params!),
-    enabled: !!params?.date && !!params?.time && !!params?.duration && !!params?.guests,
+    enabled: !!params?.date && !!params?.time && !!params?.duration && params?.guests != null,
   });
 }

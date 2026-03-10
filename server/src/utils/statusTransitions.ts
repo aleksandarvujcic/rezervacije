@@ -18,9 +18,9 @@ const ALL_STATUSES = new Set<string>([
 ]);
 
 export const VALID_TRANSITIONS: Record<ReservationStatus, ReservationStatus[]> = {
-  nova: ['seated', 'otkazana', 'odlozena'],
-  potvrdjena: ['seated', 'otkazana', 'odlozena'],
-  seated: ['zavrsena', 'no_show', 'nova'],
+  nova: ['seated', 'no_show', 'otkazana', 'odlozena'],
+  potvrdjena: ['seated', 'no_show', 'otkazana', 'odlozena'],
+  seated: ['zavrsena', 'nova'],
   waitlist: ['nova', 'otkazana'],
   odlozena: ['nova', 'otkazana'],
   zavrsena: ['seated'],

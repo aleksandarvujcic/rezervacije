@@ -64,28 +64,31 @@ export function MobileAgendaView({ date, search = '', onViewReservation }: Mobil
   const isToday = date === now.format('YYYY-MM-DD');
   const currentTime = now.format('HH:mm');
 
-  // Count free tables per zone
+  // Count free tables per zone (only zones that have tables in timeline data)
   const freeByZone = useMemo(() => {
     if (!timelineData || !zones) return [];
     const activeZones = zones.filter((z) => z.is_active);
 
-    return activeZones.map((zone) => {
-      const zoneTables = timelineData.filter((e) => e.table.zone_id === zone.id);
-      const totalTables = zoneTables.length;
-      const occupiedNow = zoneTables.filter((entry) =>
-        entry.reservations.some((r) => {
-          if (r.status !== 'seated' && r.status !== 'potvrdjena') return false;
-          const start = r.start_time.substring(0, 5);
-          const end = r.end_time.substring(0, 5);
-          return isToday ? start <= currentTime && end > currentTime : false;
-        })
-      ).length;
-      return {
-        zone,
-        free: totalTables - (isToday ? occupiedNow : 0),
-        total: totalTables,
-      };
-    });
+    return activeZones
+      .map((zone) => {
+        const zoneTables = timelineData.filter((e) => e.table.zone_id === zone.id);
+        const totalTables = zoneTables.length;
+        if (totalTables === 0) return null; // Skip zones with no tables (seasonal/inactive)
+        const occupiedNow = zoneTables.filter((entry) =>
+          entry.reservations.some((r) => {
+            if (r.status !== 'seated' && r.status !== 'potvrdjena') return false;
+            const start = r.start_time.substring(0, 5);
+            const end = r.end_time.substring(0, 5);
+            return isToday ? start <= currentTime && end > currentTime : false;
+          })
+        ).length;
+        return {
+          zone,
+          free: totalTables - (isToday ? occupiedNow : 0),
+          total: totalTables,
+        };
+      })
+      .filter(Boolean) as { zone: (typeof zones)[0]; free: number; total: number }[];
   }, [timelineData, zones, isToday, currentTime]);
 
   const totalFree = freeByZone.reduce((s, z) => s + z.free, 0);
