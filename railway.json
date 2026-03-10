@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "cd server && npx tsx ../scripts/migrate.ts && npx tsx ../scripts/seed.ts && node dist/index.js",
+    "startCommand": "cd server && NODE_PATH=./node_modules npx tsx ../scripts/migrate.ts && NODE_PATH=./node_modules npx tsx ../scripts/seed.ts && node dist/index.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
